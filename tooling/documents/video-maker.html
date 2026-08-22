@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <title>نبري - صناعة الفيديو</title>
+  <style>
+    html,body{margin:0;background:#081f17;color:white;font-family:Arial,sans-serif;display:grid;place-items:center;min-height:100%}
+    canvas{width:min(100vw,1280px);height:auto;box-shadow:0 20px 60px #0008}
+    #status{position:fixed;left:12px;bottom:8px;font:12px Arial;color:#d9ef9f}
+  </style>
+</head>
+<body>
+  <canvas id="video" width="1280" height="720"></canvas>
+  <div id="status">جاري الإعداد...</div>
+  <script type="module">
+    const C={green:'#123C2D',green2:'#1D5A43',lime:'#D9EF9F',lime2:'#EEF7D7',gold:'#C7963B',cream:'#F7F4EC',ink:'#14231C',white:'#FFFFFF',gray:'#66716B'};
+    const query=new URLSearchParams(location.search);
+    const mode=query.get('mode')||'overview';
+    const duration=Number(query.get('seconds')||4);
+    const output=mode==='order'?'06-فيديو-طريقة-إرسال-طلب-العميل.webm':'05-فيديو-تعريفي-لنظام-نبري.webm';
+    const overview=[
+      {title:'نظام نبري للمبيعات والتوزيع',sub:'من الطلب إلى التحصيل في مسار واحد',kind:'cover'},
+      {img:'assets/01-admin-dashboard.png',title:'إدارة واضحة من شاشة واحدة',sub:'طلبات وعملاء وتحصيل ومخزون وقرارات يومية'},
+      {img:'assets/02-price-list.png',title:'قائمة أسعار واحدة للجميع',sub:'الإدارة والمندوب والعميل يستخدمون المصدر نفسه'},
+      {img:'assets/05-employee.png',title:'المندوب يعرف المطلوب الآن',sub:'مسارات وأولويات وزيارات وتحصيلات قابلة للمتابعة'},
+      {img:'assets/06-customer.png',title:'العميل يطلب من كتالوج نبري',sub:'اختيار المنتجات ومراجعة السعر قبل إرسال الطلب'},
+      {img:'assets/03-orders.png',title:'الطلب يظهر لدى الإدارة فورًا',sub:'تحديث الحالة حتى التجهيز والتسليم والتحصيل'},
+      {title:'ابدأ صغيرًا وتوسّع على بيانات',sub:'اعتمد الأسعار، اختر أول 20 عميلًا، ثم اختبر الواقع',kind:'end'}
+    ];
+    const order=[
+      {title:'كيف يرسل العميل طلبه؟',sub:'رحلة قصيرة من قائمة الأسعار إلى متابعة الإدارة',kind:'cover'},
+      {img:'assets/06-customer.png',title:'1. اختر المنتج',sub:'السعر يأتي من القائمة الموحدة المعتمدة'},
+      {img:'assets/07-customer-cart.png',title:'2. راجع الكمية والإجمالي',sub:'يعيد النظام فحص السعر والمخزون قبل التسجيل'},
+      {img:'assets/03-orders.png',title:'3. يظهر الطلب لدى الإدارة',sub:'يمكن تحديث حالته ومتابعة التجهيز والتسليم'},
+      {title:'طلب واضح، حالة واضحة، تحصيل مرتبط',sub:'هذه هي قاعدة التشغيل في المرحلة الأولى',kind:'end'}
+    ];
+    const scenes=mode==='order'?order:overview;
+    const canvas=document.getElementById('video');
+    const ctx=canvas.getContext('2d');
+    ctx.direction='rtl';
+    const status=document.getElementById('status');
+    const imgs={};
+    async function loadImage(src){if(!src)return null;if(imgs[src])return imgs[src];const im=new Image();im.src=src;await im.decode();imgs[src]=im;return im;}
+    await Promise.all(scenes.map(s=>loadImage(s.img)));
+    function roundRect(x,y,w,h,r,fill){ctx.beginPath();ctx.roundRect(x,y,w,h,r);ctx.fillStyle=fill;ctx.fill();}
+    function cover(scene,end=false){
+      ctx.fillStyle=C.green;ctx.fillRect(0,0,1280,720);ctx.fillStyle=C.lime;ctx.fillRect(0,0,18,720);
+      ctx.fillStyle=end?C.gold:C.lime;ctx.beginPath();ctx.arc(1040,170,125,0,Math.PI*2);ctx.fill();
+      ctx.fillStyle=C.green;ctx.font='700 58px Arial';ctx.textAlign='center';ctx.fillText('نبري',1040,190);
+      ctx.fillStyle=C.white;ctx.textAlign='right';ctx.font='700 60px Arial';ctx.fillText(scene.title,890,310);
+      ctx.fillStyle=C.lime2;ctx.font='30px Arial';ctx.fillText(scene.sub,890,385);
+      roundRect(748,500,405,76,18,C.lime);ctx.fillStyle=C.green;ctx.font='700 22px Arial';ctx.textAlign='center';ctx.fillText(end?'المرحلة الأولى جاهزة للتجربة':'الإدارة · المندوب · العميل',950,548);
+    }
+    function screenshotScene(scene,index){
+      ctx.fillStyle=C.cream;ctx.fillRect(0,0,1280,720);
+      const im=imgs[scene.img];const scale=Math.max(1280/im.width,720/im.height);const w=im.width*scale,h=im.height*scale;ctx.drawImage(im,(1280-w)/2,(720-h)/2,w,h);
+      const grad=ctx.createLinearGradient(0,0,1280,0);grad.addColorStop(0,'rgba(18,60,45,.08)');grad.addColorStop(.48,'rgba(18,60,45,.14)');grad.addColorStop(1,'rgba(18,60,45,.96)');ctx.fillStyle=grad;ctx.fillRect(0,0,1280,720);
+      roundRect(724,92,500,500,26,'rgba(18,60,45,.92)');
+      ctx.fillStyle=C.lime;ctx.textAlign='right';ctx.font='700 20px Arial';ctx.fillText(`الخطوة ${index} من ${scenes.length-2}`,1168,145);
+      ctx.fillStyle=C.white;ctx.font='700 43px Arial';wrap(scene.title,1168,220,408,55);
+      ctx.fillStyle=C.lime2;ctx.font='25px Arial';wrap(scene.sub,1168,370,408,38);
+      ctx.fillStyle=C.gold;ctx.fillRect(1128,530,40,5);
+    }
+    function wrap(text,x,y,maxWidth,lineHeight){const words=text.split(' ');let line='';for(const word of words){const test=line?line+' '+word:word;if(ctx.measureText(test).width>maxWidth&&line){ctx.fillText(line,x,y);line=word;y+=lineHeight}else line=test}ctx.fillText(line,x,y)}
+    function frame(scene,index,progress){
+      if(scene.kind==='cover')cover(scene,false);else if(scene.kind==='end')cover(scene,true);else screenshotScene(scene,index);
+      ctx.fillStyle='rgba(255,255,255,.18)';ctx.fillRect(0,704,1280,16);ctx.fillStyle=C.lime;ctx.fillRect(0,704,1280*((index+progress)/scenes.length),16);
+      if(progress<.12){ctx.fillStyle=`rgba(247,244,236,${1-progress/.12})`;ctx.fillRect(0,0,1280,720)}
+    }
+    const stream=canvas.captureStream(30);
+    const mime=MediaRecorder.isTypeSupported('video/webm;codecs=vp9')?'video/webm;codecs=vp9':'video/webm;codecs=vp8';
+    const rec=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:5200000});
+    const chunks=[];rec.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};
+    const start=performance.now();let stopped=false;rec.start(1000);status.textContent='يُسجل الفيديو الآن...';
+    function animate(now){
+      const elapsed=(now-start)/1000;const index=Math.min(scenes.length-1,Math.floor(elapsed/duration));const local=(elapsed-index*duration)/duration;frame(scenes[index],index,local);
+      if(elapsed<scenes.length*duration){requestAnimationFrame(animate)}else if(!stopped){stopped=true;rec.stop()}
+    }
+    rec.onstop=async()=>{
+      status.textContent='جاري حفظ الفيديو...';const blob=new Blob(chunks,{type:mime});
+      const res=await fetch('/upload?name='+encodeURIComponent(output),{method:'POST',headers:{'Content-Type':'video/webm'},body:blob});
+      window.videoResult=await res.json();window.videoStatus='uploaded';status.textContent='تم حفظ الفيديو: '+output;
+    };
+    requestAnimationFrame(animate);
+  </script>
+</body>
+</html>
