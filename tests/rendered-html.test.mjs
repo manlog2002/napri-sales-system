@@ -13,7 +13,7 @@ async function render() {
   );
 }
 
-test("server-renders the Arabic NAPRI operating system", async () => {
+test("server-renders the Arabic NAPRI Delivery V1 shell", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
@@ -23,36 +23,53 @@ test("server-renders the Arabic NAPRI operating system", async () => {
   assert.match(html, /<title>نبري \| نظام المبيعات والتوزيع<\/title>/i);
   assert.match(html, /مركز قيادة نبري/);
   assert.match(html, /المندوب والموظف/);
-  assert.match(html, /واجهة العميل|العميل/);
-  assert.match(html, /119 كود عميل/);
-  assert.match(html, /126 حركة بيع/);
+  assert.match(html, /إدارة البيانات/);
+  assert.match(html, /اعتماد الأسعار/);
+  assert.match(html, /NAPRI-DV1-2026-08/);
+  assert.match(html, /دخول ChatGPT آمن/);
   assert.match(html, /og\.png/);
   assert.doesNotMatch(html, /codex-preview|SkeletonPreview|Your site is taking shape/);
 });
 
-test("uses durable D1 storage and excludes contact fields from the demo API", async () => {
-  const [page, layout, api, hosting, packageJson] = await Promise.all([
+test("enforces authenticated roles, customer isolation, stock safety, and audit logging", async () => {
+  const [page, api, auth, hosting, migration] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/sales/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/chatgpt-auth.ts", import.meta.url), "utf8"),
     readFile(new URL("../.openai/hosting.json", import.meta.url), "utf8"),
-    readFile(new URL("../package.json", import.meta.url), "utf8"),
+    readFile(new URL("../drizzle/0001_tearful_thunderball.sql", import.meta.url), "utf8"),
   ]);
 
   assert.match(hosting, /"d1":\s*"DB"/);
-  assert.match(api, /CREATE TABLE IF NOT EXISTS customers/);
-  assert.match(api, /create_order/);
-  assert.match(api, /record_collection/);
+  assert.match(auth, /oai-authenticated-user-id/);
+  assert.match(api, /getChatGPTUser/);
+  assert.match(api, /const roleActions: Record<Role, string\[]>/);
+  assert.match(api, /if \(!can\(session, action\)\)/);
+  assert.match(api, /created_by_user_id=\? OR customer_id=\?/);
+  assert.match(api, /session\.role === "customer"/);
+  assert.match(api, /priceStatus\?\.value !== "active"/);
+  assert.match(api, /contactPhone/);
+  assert.match(api, /deliveryAddress/);
+  assert.match(api, /request_key/);
+  assert.match(api, /audit_logs/);
+  assert.match(api, /prevent_negative_stock/);
   assert.match(api, /update_order_status/);
-  assert.match(api, /NAPRI-P1-2026-08/);
-  assert.doesNotMatch(api, /phone|mobile|address|رقم التلفون|رقم الموبايل/i);
-  assert.match(page, /type Role = "admin" \| "employee" \| "customer"/);
-  assert.match(page, /توقع الاستهلاك/);
-  assert.match(page, /هيكل الشركة/);
-  assert.match(page, /قائمة الأسعار الموحّدة/);
-  assert.match(page, /تعذر حفظ الطلب. لم تُسجل العملية/);
-  assert.doesNotMatch(page, /id: Date\.now\(\), customerName, source, total/);
-  assert.match(layout, /twitter:\s*\{ card: "summary_large_image"/);
+  assert.match(api, /upsert_product/);
+  assert.match(api, /upsert_customer/);
+  assert.match(api, /adjust_inventory/);
+  assert.match(api, /assign_role/);
+  assert.match(migration, /CREATE TABLE `app_users`/);
+  assert.match(migration, /CREATE TABLE `audit_logs`/);
+  assert.match(migration, /CREATE TABLE `inventory_movements`/);
+  assert.match(migration, /CREATE TRIGGER `prevent_negative_stock`/);
+  assert.match(page, /crypto\.randomUUID\(\)/);
+  assert.match(page, /تأكيد بيانات التسليم/);
+  assert.match(page, /إدارة البيانات الرئيسية/);
+  assert.doesNotMatch(page, /new Date\("2026-08-18T00:00:00"\)/);
+});
+
+test("keeps production assets and private-delivery documentation inputs present", async () => {
+  const packageJson = await readFile(new URL("../package.json", import.meta.url), "utf8");
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
   await access(new URL("../public/og.png", import.meta.url));
   await assert.rejects(access(new URL("../app/_sites-preview/SkeletonPreview.tsx", import.meta.url)));

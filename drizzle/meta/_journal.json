@@ -8,6 +8,13 @@
       "when": 1787071102040,
       "tag": "0000_silent_grey_gargoyle",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1787841716626,
+      "tag": "0001_tearful_thunderball",
+      "breakpoints": true
     }
   ]
 }

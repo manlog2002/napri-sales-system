@@ -59,7 +59,10 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .profile-chip span { display: grid; gap: 3px; }
 .profile-chip strong { font-size: 11px; }
 .profile-chip small { color: var(--muted); font-size: 9px; }
-.profile-chip button { border: 0; background: transparent; color: var(--muted); cursor: pointer; }
+.profile-chip button,.profile-chip a { border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 9px; text-decoration: none; }
+.price-approval-button { border: 1px solid rgba(255,255,255,.25); border-radius: 10px; padding: 9px 12px; background: var(--lime); color: var(--green); font-weight: 800; cursor: pointer; }
+.admin-tools-button { border: 1px solid rgba(255,255,255,.25); border-radius: 10px; padding: 9px 12px; background: transparent; color: #fff; font-weight: 800; cursor: pointer; }
+.role-switch button:disabled { cursor: not-allowed; opacity: .45; }
 
 .content { padding: 34px; max-width: 1440px; width: 100%; margin: 0 auto; overflow: hidden; }
 .section-title { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 25px; }
@@ -233,6 +236,9 @@ td small.block { display: block; margin-top: 4px; color: var(--muted); font-size
   .cart-card { position:static; }
   .shop-hero { margin:-25px -20px 20px; padding:45px 28px; }
 }
+
+.modal textarea { width:100%; border:1px solid var(--line); border-radius:10px; padding:11px 12px; background:#fff; color:var(--ink); font:inherit; resize:vertical; }
+.admin-tool-tabs { display:grid; grid-template-columns:repeat(5,1fr); gap:6px; margin-bottom:18px; }.admin-tool-tabs button { border:1px solid var(--line); border-radius:9px; padding:9px 5px; background:#fff; color:var(--muted); cursor:pointer; }.admin-tool-tabs button.active { border-color:var(--green); background:var(--lime-soft); color:var(--green); font-weight:800; }.admin-form-grid { display:grid; grid-template-columns:1fr 1fr; gap:11px; margin-bottom:16px; }.admin-form-grid label { display:grid; gap:6px; color:var(--muted); font-size:9px; }.admin-form-grid .wide { grid-column:1/-1; }.admin-form-grid input,.admin-form-grid select,.admin-form-grid textarea { width:100%; border:1px solid var(--line); border-radius:10px; padding:11px 12px; background:#fff; color:var(--ink); font:inherit; }.audit-list { display:grid; gap:7px; }.audit-list > div { display:flex; justify-content:space-between; gap:12px; padding:10px 12px; border:1px solid var(--line); border-radius:10px; }.audit-list span { display:grid; gap:3px; }.audit-list small,.audit-list time { color:var(--muted); font-size:9px; }
 
 @media (max-width: 660px) {
   .top-actions .status-pill { display:none; }

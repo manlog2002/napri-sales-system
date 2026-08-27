@@ -16,12 +16,14 @@ type Section =
   | "structure"
   | "shop";
 
-type Product = { id: number; sku: string; name: string; category: string; packSize: string; price: number; stock: number; reorderLevel: number };
-type Customer = { id: number; code: string; name: string; route: string; salesRep: string; tier: string; lastOrderAt: string; avgReorderDays: number; expectedValue: number; balance: number };
-type Order = { id: number; customerName: string; source: string; total: number; status: string; createdAt: string };
+type Product = { id: number; sku: string; name: string; category: string; packSize: string; price: number; cost?: number; unit?: string; stock: number; reorderLevel: number };
+type Customer = { id: number; code: string; name: string; route: string; salesRep: string; tier: string; lastOrderAt: string; avgReorderDays: number; expectedValue: number; balance: number; whatsappNumber?: string; address?: string };
+type Order = { id: number; orderNumber?: string; customerName: string; source: string; total: number; status: string; createdAt: string };
 type Collection = { id: number; customerName: string; amount: number; method: string; createdAt: string };
-type PriceListMeta = { version: string; status: string; currency: string; note: string };
-type AppData = { products: Product[]; customers: Customer[]; orders: Order[]; collections: Collection[]; priceList: PriceListMeta };
+type PriceListMeta = { version: string; status: string; statusCode?: "draft" | "active"; currency: string; note: string };
+type SessionInfo = { userId: string; email: string; displayName: string; role: Role; customerId: number | null; permissions: string[] };
+type AuditEntry = { id: number; actorEmail: string; actorRole: Role; action: string; entityType: string; entityId?: string; createdAt: string };
+type AppData = { products: Product[]; customers: Customer[]; orders: Order[]; collections: Collection[]; priceList: PriceListMeta; session?: SessionInfo; audits?: AuditEntry[]; meta?: { dataProfile: string; generatedAt: string } };
 type GateInfo = { title: string; description: string; requirements: string[]; badge?: string };
 
 const roleOptions: { key: Role; label: string; hint: string }[] = [
@@ -89,8 +91,9 @@ const fallbackData: AppData = {
     { id: 3, customerName: "الخرطوم 2", amount: 750, method: "نقدي", createdAt: "2026-08-17 12:15" },
   ],
   priceList: {
-    version: "NAPRI-P1-2026-08",
-    status: "مسودة اعتماد الإدارة",
+    version: "NAPRI-DV1-2026-08",
+    status: "مسودة تنتظر اعتماد الإدارة",
+    statusCode: "draft",
     currency: "ج.م",
     note: "الأسعار نفسها تُستخدم في الإدارة والمندوب ومتجر العميل ويعيد الخادم التحقق منها عند الحفظ.",
   },
@@ -121,6 +124,7 @@ function PriceListBar({ meta, onOpen }: { meta: PriceListMeta; onOpen?: () => vo
 
 export default function Home() {
   const [role, setRole] = useState<Role>("admin");
+  const [sessionRole, setSessionRole] = useState<Role>("admin");
   const [section, setSection] = useState<Section>("overview");
   const [employeeMode, setEmployeeMode] = useState<EmployeeMode>("sales");
   const [data, setData] = useState<AppData>(fallbackData);
@@ -129,6 +133,8 @@ export default function Home() {
   const [cart, setCart] = useState<Record<number, number>>({});
   const [orderOpen, setOrderOpen] = useState(false);
   const [collectionOpen, setCollectionOpen] = useState(false);
+  const [checkoutOpen, setCheckoutOpen] = useState(false);
+  const [adminToolsOpen, setAdminToolsOpen] = useState(false);
   const [toast, setToast] = useState("");
   const [gate, setGate] = useState<GateInfo | null>(null);
   const [completedStops, setCompletedStops] = useState<string[]>(["اسواق السودان"]);
@@ -149,9 +155,22 @@ export default function Home() {
 
   useEffect(() => {
     fetch("/api/sales")
-      .then((response) => response.ok ? response.json() : Promise.reject())
-      .then((payload: AppData) => { setData({ ...payload, priceList: payload.priceList ?? fallbackData.priceList }); setDataMode("قاعدة البيانات متصلة"); })
-      .catch(() => setDataMode("وضع العرض الآمن"));
+      .then(async (response) => {
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error ?? "تعذر فتح النظام");
+        return payload as AppData;
+      })
+      .then((payload) => {
+        setData({ ...payload, priceList: payload.priceList ?? fallbackData.priceList });
+        const assignedRole = payload.session?.role ?? "customer";
+        setSessionRole(assignedRole);
+        if (assignedRole !== "admin") {
+          setRole(assignedRole);
+          setSection(assignedRole === "customer" ? "shop" : "overview");
+        }
+        setDataMode(`جلسة ${roleOptions.find((item) => item.key === assignedRole)?.label ?? assignedRole} آمنة`);
+      })
+      .catch(() => setDataMode("تعذر التحقق من جلسة الدخول"));
   }, []);
 
   useEffect(() => {
@@ -172,6 +191,7 @@ export default function Home() {
   }, [data.products, quickOrderSku]);
 
   const changeRole = (nextRole: Role) => {
+    if (sessionRole !== "admin" && nextRole !== sessionRole) return;
     setRole(nextRole);
     setSection(nextRole === "customer" ? "shop" : "overview");
   };
@@ -183,23 +203,38 @@ export default function Home() {
     const last = new Date(customer.lastOrderAt + "T00:00:00");
     const next = new Date(last);
     next.setDate(next.getDate() + customer.avgReorderDays);
-    const days = Math.ceil((next.getTime() - new Date("2026-08-18T00:00:00").getTime()) / 86400000);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const days = Math.ceil((next.getTime() - today.getTime()) / 86400000);
     const confidence = Math.max(58, Math.min(94, 92 - Math.abs(days) * 3));
     return { ...customer, next, days, confidence };
   }).sort((a, b) => a.days - b.days), [data.customers]);
 
-  const submitOrder = async (customerName: string, source: string, items: { productId: number; quantity: number }[]) => {
+  const submitOrder = async (customerName: string, source: string, items: { productId: number; quantity: number }[], details: { contactPhone?: string; deliveryAddress?: string; notes?: string } = {}) => {
     if (!items.length) { setToast("أضف منتجًا واحدًا على الأقل"); return; }
     try {
-      const response = await fetch("/api/sales", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "create_order", customerName, source, items }) });
-      if (!response.ok) throw new Error();
-      const payload = await response.json();
+      const response = await fetch("/api/sales", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "create_order", customerName, source, items, requestKey: crypto.randomUUID(), ...details }) });
+      const responsePayload = await response.json();
+      if (!response.ok) throw new Error(responsePayload.error ?? "تعذر حفظ الطلب");
+      const payload = responsePayload;
       setData((current) => ({ ...current, orders: [payload.order, ...current.orders], products: current.products.map((product) => ({ ...product, stock: Math.max(0, product.stock - (items.find((item) => item.productId === product.id)?.quantity ?? 0)) })) }));
-    } catch {
-      setToast("تعذر حفظ الطلب. لم تُسجل العملية، أعد المحاولة.");
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "تعذر حفظ الطلب. لم تُسجل العملية، أعد المحاولة.");
       return;
     }
-    setCart({}); setOrderOpen(false); setToast("تم تسجيل الطلب بنجاح");
+    setCart({}); setOrderOpen(false); setCheckoutOpen(false); setToast("تم تسجيل الطلب بنجاح");
+  };
+
+  const setPriceListStatus = async (priceListStatus: "draft" | "active") => {
+    try {
+      const response = await fetch("/api/sales", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "set_price_list_status", priceListStatus }) });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error ?? "تعذر تحديث القائمة");
+      setData((current) => ({ ...current, priceList: { ...current.priceList, statusCode: priceListStatus, status: priceListStatus === "active" ? "نشطة ومعتمدة" : "مسودة تنتظر اعتماد الإدارة" } }));
+      setToast(priceListStatus === "active" ? "تم اعتماد قائمة الأسعار للبيع" : "أعيدت قائمة الأسعار إلى المسودة");
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "تعذر تحديث قائمة الأسعار");
+    }
   };
 
   const updateOrderStatus = async (orderId: number, status: string) => {
@@ -224,17 +259,17 @@ export default function Home() {
           <div><strong>نبري</strong><span>شركة نبري للتعبئة والتغليف</span></div>
         </button>
         <div className="role-switch" aria-label="اختيار الواجهة">
-          {roleOptions.map((item) => <button key={item.key} type="button" className={role === item.key ? "active" : ""} onClick={() => changeRole(item.key)}><strong>{item.label}</strong><small>{item.hint}</small></button>)}
+          {roleOptions.map((item) => <button key={item.key} type="button" disabled={sessionRole !== "admin" && item.key !== sessionRole} className={role === item.key ? "active" : ""} onClick={() => changeRole(item.key)}><strong>{item.label}</strong><small>{sessionRole === "admin" ? item.hint : item.key === sessionRole ? "صلاحيتك الفعلية" : "غير مصرح"}</small></button>)}
         </div>
-        <div className="top-actions"><button className="icon-button" aria-label="التنبيهات" onClick={() => setGate({ title: "تنبيهات التشغيل", description: "ثلاث إشارات تحتاج مراجعة في المرحلة الأولى.", requirements: [`${data.products.filter((product) => product.stock <= product.reorderLevel).length} منتجات تحت حد الأمان`, `${data.customers.filter((customer) => customer.balance > 0).length} عملاء لديهم رصيد`, `${forecastRows.filter((row) => row.days <= 4).length} فرص إعادة طلب قريبة`], badge: "نشط الآن" })}>●<span>3</span></button><div className="status-pill"><i /> {dataMode}</div></div>
+        <div className="top-actions">{sessionRole === "admin" && <button className="admin-tools-button" type="button" onClick={() => setAdminToolsOpen(true)}>إدارة البيانات</button>}{sessionRole === "admin" && <button className="price-approval-button" type="button" onClick={() => setPriceListStatus(data.priceList.statusCode === "active" ? "draft" : "active")}>{data.priceList.statusCode === "active" ? "إيقاف الأسعار" : "اعتماد الأسعار"}</button>}<button className="icon-button" aria-label="التنبيهات" onClick={() => setGate({ title: "تنبيهات التشغيل", description: "ثلاث إشارات تحتاج مراجعة في Delivery V1.", requirements: [`${data.products.filter((product) => product.stock <= product.reorderLevel).length} منتجات تحت حد الأمان`, `${data.customers.filter((customer) => customer.balance > 0).length} عملاء لديهم رصيد`, `${forecastRows.filter((row) => row.days <= 4).length} فرص إعادة طلب قريبة`], badge: "نشط الآن" })}>●<span>3</span></button><div className="status-pill"><i /> {dataMode}</div></div>
       </header>
 
       <section className="dashboard">
         <aside className="sidebar">
           <div><p className="eyebrow">واجهة {roleOptions.find((item) => item.key === role)?.label}</p><nav>{navByRole[role].map((item) => <button key={item.key} className={"nav-item " + (section === item.key ? "selected" : "")} onClick={() => setSection(item.key)}><span>{item.label}</span><b>{item.icon}</b></button>)}</nav></div>
           <div className="sidebar-bottom">
-            <div className="import-note"><span>الأرشيف التجاري المستورد</span><strong>119 كود عميل</strong><small>126 حركة بيع · نوفمبر–ديسمبر 2024</small></div>
-            <div className="profile-chip"><div>غ</div><span><strong>غسان جيلاني</strong><small>المدير العام · عرض تجريبي</small></span><button aria-label="فتح قائمة الحساب" onClick={() => showDeferred("حسابات الدخول والصلاحيات", "الموقع المؤقت يعمل بوضع العرض. فصل حساب الإدارة والمندوب والعميل يأتي بعد اعتماد التدشين.", ["اعتماد المستخدمين والأدوار", "تحديد صلاحيات كل واجهة", "تفعيل الدخول الآمن وربط الحسابات"])}>•••</button></div>
+            <div className="import-note"><span>ملف البيانات الحالي</span><strong>{data.customers.length} عملاء نشطين</strong><small>{data.orders.length} طلبات ظاهرة · {data.meta?.dataProfile === "production" ? "بيانات تشغيل معتمدة" : "بيانات تجريبية"}</small></div>
+            <div className="profile-chip"><div>{data.session?.displayName?.slice(0,1) ?? "ن"}</div><span><strong>{data.session?.displayName ?? "مستخدم نبري"}</strong><small>{roleOptions.find((item) => item.key === sessionRole)?.label} · دخول ChatGPT آمن</small></span><a aria-label="تسجيل الخروج" href="/signout-with-chatgpt?return_to=%2F">خروج</a></div>
           </div>
         </aside>
 
@@ -242,12 +277,14 @@ export default function Home() {
           <nav className="mobile-nav" aria-label="أقسام الواجهة">{navByRole[role].map((item)=><button key={item.key} type="button" className={section===item.key?"selected":""} onClick={()=>setSection(item.key)}><b>{item.icon}</b><span>{item.label}</span></button>)}</nav>
           {role === "admin" && <AdminView section={section} data={data} forecastRows={forecastRows} outstanding={outstanding} orderSales={orderSales} search={search} setSearch={setSearch} setSection={setSection} openOrder={() => setOrderOpen(true)} openCollection={() => setCollectionOpen(true)} updateOrderStatus={updateOrderStatus} showDeferred={showDeferred} />}
           {role === "employee" && <EmployeeView section={section} mode={employeeMode} setMode={setEmployeeMode} data={data} forecastRows={forecastRows} completedStops={completedStops} toggleStop={(name) => setCompletedStops((current) => current.includes(name) ? current.filter((item) => item !== name) : [...current, name])} openOrder={() => setOrderOpen(true)} openCollection={() => setCollectionOpen(true)} updateOrderStatus={updateOrderStatus} showDeferred={showDeferred} />}
-          {role === "customer" && <CustomerView section={section} data={data} cart={cart} setCart={setCart} cartTotal={cartTotal} quickOrderSku={quickOrderSku} submit={() => submitOrder("عميل المتجر الإلكتروني", "كتالوج نبري الرقمي", Object.entries(cart).filter(([, quantity]) => quantity > 0).map(([productId, quantity]) => ({ productId: Number(productId), quantity })))} showDeferred={showDeferred} />}
+          {role === "customer" && <CustomerView section={section} data={data} cart={cart} setCart={setCart} cartTotal={cartTotal} quickOrderSku={quickOrderSku} submit={() => setCheckoutOpen(true)} showDeferred={showDeferred} />}
         </div>
       </section>
 
       {orderOpen && <OrderModal data={data} close={() => setOrderOpen(false)} submit={submitOrder} />}
       {collectionOpen && <CollectionModal data={data} close={() => setCollectionOpen(false)} done={(collection) => { setData((current) => ({ ...current, collections: [collection, ...current.collections], customers: current.customers.map((customer) => customer.name === collection.customerName ? { ...customer, balance: Math.max(0, customer.balance - collection.amount) } : customer) })); setCollectionOpen(false); setToast("تم تسجيل التحصيل"); }} />}
+      {checkoutOpen && <CheckoutModal data={data} close={() => setCheckoutOpen(false)} submit={(customerName, details) => submitOrder(customerName, "بوابة العميل", Object.entries(cart).filter(([, quantity]) => quantity > 0).map(([productId, quantity]) => ({ productId: Number(productId), quantity })), details)} />}
+      {adminToolsOpen && <AdminToolsModal data={data} close={() => setAdminToolsOpen(false)} saved={() => { setAdminToolsOpen(false); setToast("تم الحفظ في سجل التشغيل"); window.location.reload(); }} />}
       {gate && <GateModal info={gate} close={() => setGate(null)} />}
       {toast && <div className="toast"><span>✓</span>{toast}</div>}
     </main>
@@ -255,16 +292,17 @@ export default function Home() {
 }
 
 function AdminView({ section, data, forecastRows, outstanding, orderSales, search, setSearch, setSection, openOrder, openCollection, updateOrderStatus, showDeferred }: { section: Section; data: AppData; forecastRows: (Customer & { next: Date; days: number; confidence: number })[]; outstanding: number; orderSales: number; search: string; setSearch: (value: string) => void; setSection: (section: Section) => void; openOrder: () => void; openCollection: () => void; updateOrderStatus: (orderId:number,status:string)=>void; showDeferred: (title:string,description:string,requirements:string[])=>void }) {
+  const todayLabel = new Intl.DateTimeFormat("ar-EG", { dateStyle: "full" }).format(new Date());
   if (section === "customers") return <CustomersView rows={forecastRows} search={search} setSearch={setSearch} openOrder={openOrder} />;
   if (section === "orders") return <OrdersView orders={data.orders} openOrder={openOrder} updateOrderStatus={updateOrderStatus} canUpdate />;
   if (section === "routes") return <RoutesView showDeferred={showDeferred} />;
   if (section === "collections") return <CollectionsView data={data} outstanding={outstanding} openCollection={openCollection} />;
-  if (section === "inventory") return <InventoryView products={data.products} priceList={data.priceList} showDeferred={showDeferred} />;
+  if (section === "inventory") return <InventoryView products={data.products} priceList={data.priceList} />;
   if (section === "marketing") return <MarketingView showDeferred={showDeferred} />;
   if (section === "structure") return <StructureView />;
 
   return <>
-    <SectionTitle eyebrow="غرفة الإدارة · الثلاثاء 18 أغسطس 2026" title="مركز قيادة نبري" description="صورة واحدة للمبيعات والعملاء والتحصيل والمخزون، مع تحويل البيانات القديمة إلى قرارات قابلة للتنفيذ." action={<button className="primary-action" onClick={openOrder}>+ طلب جديد</button>} />
+    <SectionTitle eyebrow={`غرفة الإدارة · ${todayLabel}`} title="مركز قيادة نبري" description="صورة واحدة للمبيعات والعملاء والتحصيل والمخزون، مع تحويل البيانات القديمة إلى قرارات قابلة للتنفيذ." action={<button className="primary-action" onClick={openOrder}>+ طلب جديد</button>} />
     <PriceListBar meta={data.priceList} onOpen={() => setSection("inventory")} />
     <div className="notice-strip"><div><b>بيانات مرجعية تاريخية</b><span>شركة دان اسبايسز · 3 نوفمبر إلى 8 ديسمبر 2024 · لا تمثل مبيعات نبري الحالية</span></div><button onClick={() => setSection("customers")}>مراجعة الاستيراد ←</button></div>
     <div className="kpi-grid">
@@ -291,7 +329,7 @@ function CustomersView({ rows, search, setSearch, openOrder }: { rows: (Customer
 
 function OrdersView({ orders, openOrder, updateOrderStatus, canUpdate = false }: { orders: Order[]; openOrder: () => void; updateOrderStatus?: (orderId:number,status:string)=>void; canUpdate?: boolean }) {
   const statuses = ["جديد", "قيد التجهيز", "جاهز للتسليم", "تم التسليم"];
-  return <><SectionTitle eyebrow="المبيعات والوفاء" title="الطلبات من كل القنوات" description="الطلب من المندوب أو الكتالوج الرقمي يصل إلى قائمة واحدة، ويُسعّر من قائمة نبري الموحّدة ثم يمر بالتجهيز والتسليم." action={<button className="primary-action" onClick={openOrder}>+ إنشاء طلب</button>} /><div className="stage-grid">{statuses.map((label,index) => <article className={"stage-card " + ["lime","gold","blue","green"][index]} key={label}><span>{label}</span><strong>{orders.filter((order)=>order.status===label).length}</strong><small>طلب</small></article>)}</div><div className="table-card"><table><thead><tr><th>رقم الطلب</th><th>العميل</th><th>القناة</th><th>التاريخ</th><th>القيمة</th><th>الحالة</th></tr></thead><tbody>{orders.map((order) => <tr key={order.id}><td>#{order.id}</td><td><strong>{order.customerName}</strong></td><td>{order.source}</td><td>{shortDate(order.createdAt)}</td><td>{money(order.total)}</td><td>{canUpdate ? <select className="status-select" aria-label={`حالة الطلب ${order.id}`} value={order.status} onChange={(event)=>updateOrderStatus?.(order.id,event.target.value)}>{statuses.map((status)=><option key={status}>{status}</option>)}</select> : <Badge tone={order.status === "تم التسليم" ? "good" : order.status === "جديد" ? "warn" : "neutral"}>{order.status}</Badge>}</td></tr>)}</tbody></table></div></>;
+  return <><SectionTitle eyebrow="المبيعات والوفاء" title="الطلبات من كل القنوات" description="الطلب من المندوب أو بوابة العميل يصل إلى قائمة واحدة، ويُسعّر من قائمة نبري الموحّدة ثم يمر بالتجهيز والتسليم." action={<button className="primary-action" onClick={openOrder}>+ إنشاء طلب</button>} /><div className="stage-grid">{statuses.map((label,index) => <article className={"stage-card " + ["lime","gold","blue","green"][index]} key={label}><span>{label}</span><strong>{orders.filter((order)=>order.status===label).length}</strong><small>طلب</small></article>)}</div><div className="table-card"><table><thead><tr><th>رقم الطلب</th><th>العميل</th><th>القناة</th><th>التاريخ</th><th>القيمة</th><th>الحالة</th></tr></thead><tbody>{orders.map((order) => { const currentIndex=statuses.indexOf(order.status); return <tr key={order.id}><td>{order.orderNumber ?? `#${order.id}`}</td><td><strong>{order.customerName}</strong></td><td>{order.source}</td><td>{shortDate(order.createdAt)}</td><td>{money(order.total)}</td><td>{canUpdate ? <select className="status-select" aria-label={`حالة الطلب ${order.id}`} value={order.status} onChange={(event)=>updateOrderStatus?.(order.id,event.target.value)}>{statuses.map((status,index)=><option key={status} disabled={index < currentIndex || index > currentIndex + 1}>{status}</option>)}</select> : <Badge tone={order.status === "تم التسليم" ? "good" : order.status === "جديد" ? "warn" : "neutral"}>{order.status}</Badge>}</td></tr>})}</tbody></table></div></>;
 }
 
 function RoutesView({ showDeferred }: { showDeferred: (title:string,description:string,requirements:string[])=>void }) {
@@ -303,8 +341,8 @@ function CollectionsView({ data, outstanding, openCollection }: { data: AppData;
   return <><SectionTitle eyebrow="الذمم والتحصيل" title="كل جنيه له حالة واضحة" description="فصل الفاتورة عن التحصيل يمنع المراجع الدائرية الموجودة في ملف Excel ويصنع سجلًا قابلًا للمراجعة." action={<button className="primary-action" onClick={openCollection}>+ تسجيل تحصيل</button>} /><div className="kpi-grid compact"><article className="kpi-card accent"><span>إجمالي الرصيد الحالي</span><strong>{money(outstanding)}</strong><small>من العملاء التجريبيين</small></article><article className="kpi-card"><span>تحصيلات مسجلة</span><strong>{money(data.collections.reduce((sum,item)=>sum+item.amount,0))}</strong><small>{data.collections.length} حركات</small></article><article className="kpi-card"><span>أعلى رصيد</span><strong>{money(Math.max(...data.customers.map((c)=>c.balance)))}</strong><small>{data.customers.sort((a,b)=>b.balance-a.balance)[0]?.name}</small></article><article className="kpi-card warning"><span>حسابات للمراجعة</span><strong>{data.customers.filter((c)=>c.balance>1000).length}</strong><small>رصيد أكبر من 1,000 ج.م</small></article></div><div className="two-column"><div className="table-card"><table><thead><tr><th>العميل</th><th>الرصيد</th><th>خط السير</th><th>الأولوية</th></tr></thead><tbody>{[...data.customers].sort((a,b)=>b.balance-a.balance).map((customer)=><tr key={customer.id}><td><strong>{customer.name}</strong><small className="block">{customer.code}</small></td><td className={customer.balance ? "negative":""}>{money(customer.balance)}</td><td>{customer.route}</td><td><Badge tone={customer.balance>1000?"warn":"neutral"}>{customer.balance>1000?"اتصال اليوم":"متابعة"}</Badge></td></tr>)}</tbody></table></div><article className="panel"><div className="panel-heading"><div><span>آخر الحركات</span><h2>سجل التحصيل</h2></div></div>{data.collections.map((item)=><div className="collection-row" key={item.id}><div>↙</div><span><strong>{item.customerName}</strong><small>{item.method} · {shortDate(item.createdAt)}</small></span><b>{money(item.amount)}</b></div>)}</article></div></>;
 }
 
-function InventoryView({ products, priceList, showDeferred }: { products: Product[]; priceList: PriceListMeta; showDeferred: (title:string,description:string,requirements:string[])=>void }) {
-  return <><SectionTitle eyebrow="Product Master" title="قائمة الأسعار والمخزون" description="كل منتج له SKU وعبوة وسعر ورصيد. السعر الظاهر هنا هو نفسه الذي يراه المندوب والعميل ويستخدمه الخادم عند حفظ الطلب." action={<button className="primary-action" onClick={()=>showDeferred("إضافة أو تعديل منتج", "تعديل البيانات الرئيسية مؤجل لحماية العرض المؤقت من تغييرات غير معتمدة.", ["قائمة أسعار معتمدة من غسان", "تكلفة ووحدة بيع وعبوة لكل SKU", "صلاحية مدير المنتجات", "جرد افتتاحي موثّق"])}>+ منتج جديد</button>} /><PriceListBar meta={priceList} /><div className="product-grid">{products.map((product)=><article className="inventory-card" key={product.id}><div className={"product-glyph g"+product.id}>{product.name.slice(0,1)}</div><div className="inventory-head"><span>{product.category}</span><Badge tone={product.stock<=product.reorderLevel?"warn":"good"}>{product.stock<=product.reorderLevel?"تحت الأمان":"متوفر"}</Badge></div><h2>{product.name}</h2><p>{product.packSize} · {product.sku}</p><div className="stock-meter"><i style={{width:Math.min(100,(product.stock/(product.reorderLevel*3))*100)+"%"}} /></div><div className="inventory-foot"><span><small>المخزون</small><b>{product.stock} وحدة</b></span><span><small>السعر</small><b>{money(product.price)}</b></span></div><a className="card-link" href={`/?role=customer&sku=${encodeURIComponent(product.sku)}`}>معاينة رابط العميل ←</a></article>)}</div><div className="source-note">قائمة المرحلة الأولى: الأسعار الحالية مهيأة للاختبار وليست اعتمادًا تجاريًا نهائيًا. اعتماد غسان يحول حالة القائمة من «مسودة» إلى «نشطة» قبل البيع الحقيقي.</div></>;
+function InventoryView({ products, priceList }: { products: Product[]; priceList: PriceListMeta }) {
+  return <><SectionTitle eyebrow="Product Master" title="قائمة الأسعار والمخزون" description="كل منتج له SKU وعبوة وسعر ورصيد. السعر الظاهر هنا هو نفسه الذي يراه المندوب والعميل ويستخدمه الخادم عند حفظ الطلب." action={<button className="primary-action" onClick={()=>document.querySelector<HTMLButtonElement>(".admin-tools-button")?.click()}>+ منتج أو تسوية</button>} /><PriceListBar meta={priceList} /><div className="product-grid">{products.map((product)=><article className="inventory-card" key={product.id}><div className={"product-glyph g"+product.id}>{product.name.slice(0,1)}</div><div className="inventory-head"><span>{product.category}</span><Badge tone={product.stock<=product.reorderLevel?"warn":"good"}>{product.stock<=product.reorderLevel?"تحت الأمان":"متوفر"}</Badge></div><h2>{product.name}</h2><p>{product.packSize} · {product.sku}</p><div className="stock-meter"><i style={{width:Math.min(100,(product.stock/(Math.max(1,product.reorderLevel)*3))*100)+"%"}} /></div><div className="inventory-foot"><span><small>المخزون</small><b>{product.stock} {product.unit??"وحدة"}</b></span><span><small>السعر</small><b>{money(product.price)}</b></span></div><a className="card-link" href={`/?role=customer&sku=${encodeURIComponent(product.sku)}`}>معاينة رابط العميل ←</a></article>)}</div><div className="source-note">القائمة تبدأ «مسودة» وتتحول إلى «نشطة» فقط بقرار الإدارة؛ الطلب الخارجي يتوقف تلقائيًا أثناء المسودة.</div></>;
 }
 
 function MarketingView({ showDeferred }: { showDeferred: (title:string,description:string,requirements:string[])=>void }) {
@@ -333,8 +371,8 @@ function FieldRoute({ data, completedStops, toggleStop, openOrder, openCollectio
 }
 
 function CustomerView({ section, data, cart, setCart, cartTotal, quickOrderSku, submit, showDeferred }: { section: Section; data: AppData; cart: Record<number,number>; setCart: (cart: Record<number,number>) => void; cartTotal: number; quickOrderSku: string; submit: () => void; showDeferred: (title:string,description:string,requirements:string[])=>void }) {
-  if (section === "orders") return <><SectionTitle eyebrow="رحلة العميل التجريبية" title="الطلبات المسجلة" description="متابعة حالة الطلب من التسجيل حتى التسليم. فصل طلبات كل عميل يبدأ بعد تفعيل الحسابات." /><div className="customer-orders">{data.orders.slice(0,5).map((order)=><article key={order.id}><div><span>طلب #{order.id}</span><h2>{money(order.total)}</h2><small>{shortDate(order.createdAt)} · {order.source}</small></div><Badge tone={order.status==="تم التسليم"?"good":"warn"}>{order.status}</Badge></article>)}</div></>;
-  if (section === "overview") return <><SectionTitle eyebrow="ملف العميل" title="مرحبًا بك في نبري" description="الحساب الشخصي والعنوان والأسعار التعاقدية تأتي بعد اعتماد الدخول والصلاحيات." /><div className="account-placeholder"><div className="person-avatar alt">ع</div><h2>حساب تجريبي</h2><p>هذه الواجهة تعرض رحلة العميل ولا تكشف أرقام هواتف أو عناوين العملاء التاريخيين.</p><button className="secondary-action" onClick={()=>showDeferred("تفعيل حساب العميل", "الطلب العام يعمل الآن. الحساب الشخصي سيُفتح بعد تجهيز الهوية والصلاحيات.", ["هوية العميل ورقمه التجاري", "عنوان التسليم", "شروط الدفع", "قائمة السعر الخاصة إن وجدت", "دخول آمن"])}>متطلبات تفعيل الحساب</button></div></>;
+  if (section === "orders") return <><SectionTitle eyebrow="حساب العميل الخاص" title="طلباتي" description="تعرض هذه الصفحة الطلبات المرتبطة بحساب العميل الحالي فقط، من التسجيل حتى التسليم." /><div className="customer-orders">{data.orders.slice(0,20).map((order)=><article key={order.id}><div><span>{order.orderNumber ?? `طلب #${order.id}`}</span><h2>{money(order.total)}</h2><small>{shortDate(order.createdAt)} · {order.source}</small></div><Badge tone={order.status==="تم التسليم"?"good":"warn"}>{order.status}</Badge></article>)}</div></>;
+  if (section === "overview") return <><SectionTitle eyebrow="ملف العميل" title="مرحبًا بك في نبري" description="الحساب محمي بدخول ChatGPT، ولا يعرض إلا السجل المرتبط به." /><div className="account-placeholder"><div className="person-avatar alt">{data.session?.displayName?.slice(0,1)??"ع"}</div><h2>{data.customers[0]?.name??data.session?.displayName??"حساب عميل"}</h2><p>{data.customers[0] ? `كود ${data.customers[0].code} · الرصيد ${money(data.customers[0].balance)}` : "لم تربط الإدارة هذا الحساب بسجل عميل بعد؛ يمكن إرسال طلب جديد ببيانات التسليم."}</p><button className="secondary-action" onClick={()=>showDeferred("إدارة بيانات الحساب", "تغيير الربط والدور من صلاحيات الإدارة فقط ويسجل في سجل التدقيق.", ["البريد المعتمد", "ربط سجل العميل", "مراجعة عنوان التسليم", "اعتماد شروط الدفع"])}>بيانات الربط المطلوبة</button></div></>;
   return <><section className="shop-hero"><div><Badge tone="dark">منتجات سودانية أصيلة</Badge><h1>مذاق البيت،<br/>بتقديم نبري.</h1><p>اختر من قائمة الأسعار الموحّدة، راجع الكميات، ثم أرسل الطلب ليظهر فورًا لدى الإدارة والمندوب.</p>{quickOrderSku && <p className="catalog-entry-note">✓ تم فتح المنتج المحدد من كتالوج نبري وإضافته إلى السلة.</p>}</div><div className="shop-mark">ن<span>NAPRI</span></div></section><PriceListBar meta={data.priceList} /><div className="shop-layout"><div className="catalog-grid">{data.products.map((product)=><article id={`product-${product.sku}`} className={"catalog-card "+(product.sku===quickOrderSku?"catalog-card-selected":"")} key={product.id}><div className={"catalog-visual g"+product.id}><span>{product.name.slice(0,1)}</span><small>NAPRI</small></div><Badge tone={product.stock<=product.reorderLevel?"warn":"good"}>{product.stock>0?"متوفر":"غير متوفر"}</Badge><h2>{product.name}</h2><p>{product.packSize} · {product.category}</p><div><strong>{money(product.price)}</strong><div className="quantity-control"><button aria-label={`إنقاص ${product.name}`} onClick={()=>setCart({...cart,[product.id]:Math.max(0,(cart[product.id]??0)-1)})}>−</button><span>{cart[product.id]??0}</span><button aria-label={`زيادة ${product.name}`} disabled={product.stock<=0 || (cart[product.id]??0)>=product.stock} onClick={()=>setCart({...cart,[product.id]:Math.min(product.stock,(cart[product.id]??0)+1)})}>+</button></div></div></article>)}</div><aside className="cart-card"><span>سلة الطلب</span><h2>{Object.values(cart).reduce((s,n)=>s+n,0)} وحدات</h2>{data.products.filter((p)=>cart[p.id]).map((product)=><div className="cart-line" key={product.id}><span>{product.name} × {cart[product.id]}</span><b>{money(product.price*cart[product.id])}</b></div>)}<div className="cart-total"><span>الإجمالي من القائمة الحالية</span><strong>{money(cartTotal)}</strong></div><button disabled={!cartTotal} onClick={submit}>إرسال الطلب للتأكيد</button><small>يعيد النظام التحقق من السعر والمخزون قبل التسجيل.</small></aside></div></>;
 }
 
@@ -345,9 +383,33 @@ function OrderModal({ data, close, submit }: { data: AppData; close: () => void;
 }
 
 function CollectionModal({ data, close, done }: { data: AppData; close:()=>void; done:(collection:Collection)=>void }) {
-  const [customer,setCustomer]=useState(data.customers[0]?.name??""); const [amount,setAmount]=useState(""); const [method,setMethod]=useState("نقدي"); const [error,setError]=useState("");
-  const submit=async(e:FormEvent)=>{e.preventDefault();const value=Number(amount);if(!value)return;setError("");try{const response=await fetch("/api/sales",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"record_collection",customerName:customer,amount:value,method})});if(!response.ok)throw new Error();done((await response.json()).collection);}catch{setError("تعذر حفظ التحصيل. لم تُسجل العملية.");}};
-  return <div className="modal-backdrop"><form className="modal small" onSubmit={submit}><div className="modal-head"><div><span>الخزينة</span><h2>تسجيل تحصيل</h2></div><button type="button" onClick={close} aria-label="إغلاق">×</button></div><label>العميل<select value={customer} onChange={(e)=>setCustomer(e.target.value)}>{data.customers.map((c)=><option key={c.id}>{c.name}</option>)}</select></label><label>المبلغ<input type="number" min="1" value={amount} onChange={(e)=>setAmount(e.target.value)} placeholder="0" /></label><label>طريقة الدفع<select value={method} onChange={(e)=>setMethod(e.target.value)}><option>نقدي</option><option>تحويل بنكي</option><option>محفظة إلكترونية</option></select></label>{error&&<p className="form-error">{error}</p>}<button className="primary-action" type="submit" disabled={!Number(amount)}>حفظ التحصيل</button></form></div>;
+  const [customerId,setCustomerId]=useState(data.customers.find((item)=>item.balance>0)?.id??data.customers[0]?.id??0); const [amount,setAmount]=useState(""); const [method,setMethod]=useState("نقدي"); const [error,setError]=useState("");
+  const selected=data.customers.find((item)=>item.id===customerId);
+  const submit=async(e:FormEvent)=>{e.preventDefault();const value=Number(amount);if(!value)return;setError("");try{const response=await fetch("/api/sales",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"record_collection",customerId,amount:value,method})});const payload=await response.json();if(!response.ok)throw new Error(payload.error??"تعذر حفظ التحصيل");done(payload.collection);}catch(error){setError(error instanceof Error?error.message:"تعذر حفظ التحصيل. لم تُسجل العملية.");}};
+  return <div className="modal-backdrop"><form className="modal small" onSubmit={submit}><div className="modal-head"><div><span>الخزينة</span><h2>تسجيل تحصيل</h2></div><button type="button" onClick={close} aria-label="إغلاق">×</button></div><label>العميل<select value={customerId} onChange={(e)=>setCustomerId(Number(e.target.value))}>{data.customers.map((c)=><option key={c.id} value={c.id}>{c.name} · رصيد {money(c.balance)}</option>)}</select></label><label>المبلغ<input type="number" min="1" max={selected?.balance??undefined} value={amount} onChange={(e)=>setAmount(e.target.value)} placeholder="0" /></label><label>طريقة الدفع<select value={method} onChange={(e)=>setMethod(e.target.value)}><option>نقدي</option><option>تحويل بنكي</option><option>محفظة إلكترونية</option></select></label>{error&&<p className="form-error">{error}</p>}<button className="primary-action" type="submit" disabled={!Number(amount)||!customerId}>حفظ التحصيل</button></form></div>;
+}
+
+function CheckoutModal({ data, close, submit }: { data: AppData; close:()=>void; submit:(customerName:string,details:{contactPhone:string;deliveryAddress:string;notes:string})=>void }) {
+  const mappedCustomer=data.customers[0];
+  const [customerName,setCustomerName]=useState(mappedCustomer?.name??"");
+  const [contactPhone,setContactPhone]=useState(mappedCustomer?.whatsappNumber??"");
+  const [deliveryAddress,setDeliveryAddress]=useState(mappedCustomer?.address??"");
+  const [notes,setNotes]=useState("");
+  const approved=data.priceList.statusCode==="active";
+  return <div className="modal-backdrop"><form className="modal small" onSubmit={(event)=>{event.preventDefault();if(approved)submit(customerName,{contactPhone,deliveryAddress,notes});}}><div className="modal-head"><div><span>تأكيد بيانات التسليم</span><h2>إرسال الطلب إلى نبري</h2></div><button type="button" onClick={close} aria-label="إغلاق">×</button></div><label>اسم العميل أو المنشأة<input required value={customerName} onChange={(event)=>setCustomerName(event.target.value)} /></label><label>رقم التواصل / واتساب<input required inputMode="tel" value={contactPhone} onChange={(event)=>setContactPhone(event.target.value)} /></label><label>عنوان التسليم<textarea required rows={3} value={deliveryAddress} onChange={(event)=>setDeliveryAddress(event.target.value)} /></label><label>ملاحظات اختيارية<textarea rows={2} value={notes} onChange={(event)=>setNotes(event.target.value)} /></label>{!approved&&<p className="form-error">الطلب الخارجي متوقف حتى تعتمد الإدارة قائمة الأسعار الحالية.</p>}<button className="primary-action" type="submit" disabled={!approved||!customerName.trim()||!contactPhone.trim()||!deliveryAddress.trim()}>تأكيد وإرسال الطلب</button></form></div>;
+}
+
+function AdminToolsModal({ data, close, saved }: { data: AppData; close:()=>void; saved:()=>void }) {
+  const [mode,setMode]=useState<"product"|"customer"|"inventory"|"access"|"audit">("product");
+  const [error,setError]=useState("");
+  const [busy,setBusy]=useState(false);
+  const [product,setProduct]=useState({sku:"",name:"",category:"",packSize:"",price:"",stock:"0",reorderLevel:"0",unit:"وحدة"});
+  const [customer,setCustomer]=useState({code:"",name:"",route:"",salesRep:"",tier:"B",whatsappNumber:"",address:""});
+  const [inventory,setInventory]=useState({productId:String(data.products[0]?.id??""),quantity:"",reason:""});
+  const [access,setAccess]=useState({userEmail:"",role:"employee" as Role,mappedCustomerId:""});
+  const send=async(payload:Record<string,unknown>)=>{setBusy(true);setError("");try{const response=await fetch("/api/sales",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});const result=await response.json();if(!response.ok)throw new Error(result.error??"تعذر الحفظ");saved();}catch(reason){setError(reason instanceof Error?reason.message:"تعذر الحفظ");setBusy(false);}};
+  const submit=(event:FormEvent)=>{event.preventDefault();if(mode==="product")void send({action:"upsert_product",product:{...product,price:Number(product.price),stock:Number(product.stock),reorderLevel:Number(product.reorderLevel)}});if(mode==="customer")void send({action:"upsert_customer",customer});if(mode==="inventory")void send({action:"adjust_inventory",productId:Number(inventory.productId),quantity:Number(inventory.quantity),reason:inventory.reason});if(mode==="access")void send({action:"assign_role",userEmail:access.userEmail,role:access.role,mappedCustomerId:access.mappedCustomerId?Number(access.mappedCustomerId):null});};
+  return <div className="modal-backdrop"><form className="modal" onSubmit={submit}><div className="modal-head"><div><span>صلاحيات الإدارة · كل تغيير مسجل</span><h2>إدارة البيانات الرئيسية</h2></div><button type="button" onClick={close} aria-label="إغلاق">×</button></div><div className="admin-tool-tabs"><button type="button" className={mode==="product"?"active":""} onClick={()=>setMode("product")}>منتج</button><button type="button" className={mode==="customer"?"active":""} onClick={()=>setMode("customer")}>عميل</button><button type="button" className={mode==="inventory"?"active":""} onClick={()=>setMode("inventory")}>المخزون</button><button type="button" className={mode==="access"?"active":""} onClick={()=>setMode("access")}>الصلاحيات</button><button type="button" className={mode==="audit"?"active":""} onClick={()=>setMode("audit")}>السجل</button></div>{mode==="product"&&<div className="admin-form-grid"><label>SKU<input required value={product.sku} onChange={(e)=>setProduct({...product,sku:e.target.value})} /></label><label>اسم المنتج<input required value={product.name} onChange={(e)=>setProduct({...product,name:e.target.value})} /></label><label>الفئة<input required value={product.category} onChange={(e)=>setProduct({...product,category:e.target.value})} /></label><label>العبوة<input required value={product.packSize} onChange={(e)=>setProduct({...product,packSize:e.target.value})} /></label><label>السعر<input required type="number" min="0" step="0.01" value={product.price} onChange={(e)=>setProduct({...product,price:e.target.value})} /></label><label>رصيد افتتاحي<input type="number" min="0" value={product.stock} onChange={(e)=>setProduct({...product,stock:e.target.value})} /></label><label>حد إعادة الطلب<input type="number" min="0" value={product.reorderLevel} onChange={(e)=>setProduct({...product,reorderLevel:e.target.value})} /></label><label>الوحدة<input value={product.unit} onChange={(e)=>setProduct({...product,unit:e.target.value})} /></label></div>}{mode==="customer"&&<div className="admin-form-grid"><label>كود العميل<input required value={customer.code} onChange={(e)=>setCustomer({...customer,code:e.target.value})} /></label><label>اسم العميل<input required value={customer.name} onChange={(e)=>setCustomer({...customer,name:e.target.value})} /></label><label>المنطقة / المسار<input value={customer.route} onChange={(e)=>setCustomer({...customer,route:e.target.value})} /></label><label>المندوب<input value={customer.salesRep} onChange={(e)=>setCustomer({...customer,salesRep:e.target.value})} /></label><label>التصنيف<select value={customer.tier} onChange={(e)=>setCustomer({...customer,tier:e.target.value})}><option>A</option><option>B</option><option>C</option></select></label><label>واتساب<input inputMode="tel" value={customer.whatsappNumber} onChange={(e)=>setCustomer({...customer,whatsappNumber:e.target.value})} /></label><label className="wide">العنوان<textarea rows={2} value={customer.address} onChange={(e)=>setCustomer({...customer,address:e.target.value})} /></label></div>}{mode==="inventory"&&<div className="admin-form-grid"><label className="wide">المنتج<select value={inventory.productId} onChange={(e)=>setInventory({...inventory,productId:e.target.value})}>{data.products.map((item)=><option key={item.id} value={item.id}>{item.sku} · {item.name} · رصيد {item.stock}</option>)}</select></label><label>التعديل (+ إضافة / − صرف)<input required type="number" value={inventory.quantity} onChange={(e)=>setInventory({...inventory,quantity:e.target.value})} /></label><label>السبب<input required value={inventory.reason} onChange={(e)=>setInventory({...inventory,reason:e.target.value})} /></label></div>}{mode==="access"&&<div className="admin-form-grid"><label className="wide">بريد المستخدم<input required type="email" value={access.userEmail} onChange={(e)=>setAccess({...access,userEmail:e.target.value})} /></label><label>الدور<select value={access.role} onChange={(e)=>setAccess({...access,role:e.target.value as Role})}><option value="employee">موظف / مندوب</option><option value="customer">عميل</option><option value="admin">إدارة</option></select></label><label>ربط سجل العميل<select value={access.mappedCustomerId} onChange={(e)=>setAccess({...access,mappedCustomerId:e.target.value})}><option value="">بدون ربط</option>{data.customers.map((item)=><option key={item.id} value={item.id}>{item.code} · {item.name}</option>)}</select></label></div>}{mode==="audit"&&<div className="audit-list">{data.audits?.length ? data.audits.map((item)=><div key={item.id}><span><strong>{item.action}</strong><small>{item.actorEmail} · {item.entityType} {item.entityId??""}</small></span><time>{shortDate(item.createdAt)}</time></div>) : <p>لا توجد حركات تدقيق بعد.</p>}</div>}{error&&<p className="form-error">{error}</p>}{mode!=="audit"&&<button className="primary-action" type="submit" disabled={busy}>{busy?"جارٍ الحفظ...":"حفظ التغيير"}</button>}</form></div>;
 }
 
 function GateModal({ info, close }: { info: GateInfo; close: () => void }) {
